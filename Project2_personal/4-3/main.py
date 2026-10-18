@@ -35,6 +35,28 @@ f0 = np.asarray(img)
 F = np.fft.fft2(f0)
 M, N = F.shape
 
-H = gaussian_lowpass_filter(M, N, 30)
+H_low = gaussian_lowpass_filter(M, N, 10)
+H_high = 1 - gaussian_lowpass_filter(M, N, 200)
+H = H_low + H_high
 g = freq_filter(f0, H)
-Image.fromarray(np.clip(g, 0, 255).astype(np.uint8)).save("output/lowpass_D0_30.png")
+Image.fromarray(np.clip(g, 0, 255).astype(np.uint8)).save("output/mixPass.png")
+
+# 水平方向的频率索引，零频放在中央
+x = np.arange(N) - N // 2
+
+# 取穿过零频的中心行
+plt.figure(figsize=(8, 4))
+plt.plot(x, H_low[M // 2, :], label='Lowpass: D0=15')
+plt.plot(x, H_high[M // 2, :], label='Highpass: D0=80')
+plt.plot(x, H[M // 2, :], label='Mixed', linewidth=2)
+
+plt.xlim(-150, 150)
+plt.ylim(-0.05, 1.05)
+plt.xlabel('Horizontal frequency bin')
+plt.ylabel('Weight H')
+plt.title('Filter frequency response: center row')
+plt.grid(alpha=0.3)
+plt.legend()
+plt.tight_layout()
+plt.savefig('output/filter_response.png', dpi=150)
+plt.show()
