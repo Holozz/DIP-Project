@@ -1,0 +1,142 @@
+\documentclass[UTF8,a4paper,zihao=5,fontset=fandol]{ctexart}
+\usepackage[left=19mm,right=19mm,top=18mm,bottom=19mm]{geometry}
+\usepackage{amsmath,amssymb,graphicx,booktabs,tabularx,float,caption,fancyhdr}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{pdftitle={数字图像处理 第二次project},pdfauthor={韩宇、罗云飞、李响}}
+\graphicspath{{C:/Users/Rodgolin/Documents/Codex/2026-09-22/s/outputs/第二次作业精简版/韩宇24319050_罗云飞24307120_李响24363137_第二次project/results/}}
+\linespread{1.12}
+\setlength{\parskip}{3pt}
+\setlength{\intextsep}{7pt}
+\captionsetup{font=small,skip=4pt}
+\renewcommand{\arraystretch}{1.12}
+\ctexset{section={format=\large\bfseries,beforeskip=9pt,afterskip=4pt}}
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\small 数字图像处理}\fancyhead[R]{\small 第二次 project}
+\fancyfoot[C]{\small\thepage}\setlength{\headheight}{14pt}
+\begin{document}
+\thispagestyle{plain}
+\begin{center}
+{\LARGE\bfseries 数字图像处理\quad 第二次 project}\par\vspace{5pt}
+04-03、04-04、04-05\qquad 截止/提交日期：2026 年 10 月 14 日
+\end{center}
+\noindent 小组分工：
+\begin{center}\small
+\begin{tabularx}{\linewidth}{@{}llX@{}}\toprule
+姓名 & 学号 & 分工\\\midrule
+韩宇 & 24319050 & 低通滤波代码、参数对比及 04-03 报告。\\
+罗云飞 & 24307120 & 高通滤波代码、边界对比及 04-04 报告。\\
+李响 & 24363137 & 频域相关代码、坐标检查及 04-05 报告。\\\bottomrule
+\end{tabularx}
+\end{center}
+三人共同检查结果和整理报告。本次对字符图做高斯低通和高通滤波，再用频域相关定位字母 T。输入采用所给的三张图片，计算时保留浮点数，保存图片时再截取到 $[0,255]$ 并取整。
+
+\section{04-03 高斯低通与边缘加权融合}
+\textbf{基础实现。} 本部分使用个人版本 \texttt{Project2\_personal/4-3/main.py} 和输入图像 \texttt{input/4.11(a).png}。图像大小为 $M\times N=549\times558$（行$\times$列），转为灰度图后以浮点数计算。高斯低通函数支持指定大小、参数 $D_0$ 和中心，默认中心为 $(\lfloor M/2\rfloor,\lfloor N/2\rfloor)=(274,279)$，与中心化后的零频位置对齐：
+\[
+H_L(u,v;D_0)=\exp\left[-\frac{(u-u_0)^2+(v-v_0)^2}{2D_0^2}\right].
+\]
+对原图做二维 FFT，用 \texttt{fftshift} 将零频移到中心，与 $H_L$ 逐元素相乘，再撤销中心化并逆变换、取实部，得到低通图 $g_L(D_0)$。本实现不补零，因此采用周期边界假设。$D_0$ 越小，通过的频带越窄，空间平滑越强。
+
+\textbf{改进思路。} 普通高斯低通在抑制细碎纹理时，也会混合黑白边界两侧的灰度，导致轮廓变宽。为保留明显边界，先生成高斯低通图，再根据原图的局部梯度构造空间权重，将低通图与原图融合。梯度大小及初始权重为
+\[
+m(x,y)=\sqrt{(\partial_x f)^2+(\partial_y f)^2},\qquad
+w_0(x,y)=1-\exp\left[-\frac{m(x,y)^2}{2T^2}\right],\quad T=10.
+\]
+梯度由 \texttt{np.gradient} 计算。平坦处 $w_0$ 接近 0，主要使用低通结果；明显边缘处 $w_0$ 较大，保留更多原图。仅保护梯度较大的窄边缘时，高斯模糊仍会影响其两侧，因此进一步扩大保护范围。代码先将权重四舍五入为 8 位灰度，再通过 \texttt{MaxFilter(size=15)} 取 $15\times15$ 邻域最大值，最后除以 255，得到 $w\in[0,1]$。这使边缘保护向周围扩展约 7 像素。
+
+最终输出为
+\[
+g_{\mathrm{weighted}}=(1-w)g_L(10)+wf
+=g_L(10)+w\bigl[f-g_L(10)\bigr].
+\]
+这里的 $w$ 按空间位置选择保留程度，不直接加到频域滤波器上。最终结果属于高斯低通后的空间自适应融合，不再是单一的线性高斯低通。
+
+\textbf{参数与对比。} 当前普通低通对照使用 $D_0=40$，加权方案的基础低通使用更强的 $D_0=10$。选择不同参数是因为融合会重新引入部分原图细节：如果两者使用同样的基础平滑强度，加权结果可能显得平滑不足。因此先增强基础平滑，再利用权重保护边界，在区域内部平滑与轮廓保留之间取得视觉折中。当前配置如下：
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}\toprule
+方案 & 高斯参数 & 空间权重\\\midrule
+普通低通 & $D_0=40$ & 无\\
+边缘加权融合 & $D_0=10$ & $T=10$，$15\times15$ 最大值扩展\\\bottomrule
+\end{tabular}
+\end{center}
+\begin{figure}[H]\centering
+\begin{minipage}{.32\linewidth}\centering
+\includegraphics[width=\linewidth]{D:/Project/DIP/Project2_personal/4-3/input/4.11(a).png}\\
+\small 原图
+\end{minipage}\hfill
+\begin{minipage}{.32\linewidth}\centering
+\includegraphics[width=\linewidth]{D:/Project/DIP/Project2_personal/4-3/output/lowPass.png}\\
+\small 普通低通，$D_0=40$
+\end{minipage}\hfill
+\begin{minipage}{.32\linewidth}\centering
+\includegraphics[width=\linewidth]{D:/Project/DIP/Project2_personal/4-3/output/weightLowPass.png}\\
+\small 加权融合，基础 $D_0=10$
+\end{minipage}
+\caption{当前输入、普通高斯低通与采用更强基础平滑的边缘加权结果。两种方案使用不同的 $D_0$，用于比较实际参数配置下的视觉效果。}\label{fig:low}
+\end{figure}
+
+\textbf{结果与局限。} 普通低通图中的细线、字母及方块边缘较柔和；加权结果中的竖线、大字母和小字符轮廓更清楚，部分低梯度背景区域也受到更强的平滑。说明更强的基础低通与边缘权重可以组合使用，而不必通过整体增大 $D_0$ 来保留细节。不过，上方部分黑方块周围仍能看到明暗光晕和内部灰度不均，右侧密集斑点也保留较多。其原因是原始梯度不能区分有效边界与细碎纹理，最大值扩展又会使附近区域共同获得较高保护权重；边界附近重新引入的原图与较强低通结果之间仍可能存在不自然过渡。
+
+本次对比展示的是两套参数配置的视觉折中，没有固定 $D_0$ 单独比较权重作用，也未以干净参考图计算去噪指标，因此不能据此断言去噪精度提高，或完全消除了跨边界模糊。基础低通已完成题目所需的滤波函数；本轮实验聚焦 $D_0=40$ 的普通低通与 $D_0=10$ 的加权方案，不将当前结果称为教材图 4.18(c) 的复现。
+
+\textbf{运行与输出。} 安装 NumPy、Pillow 和 Matplotlib 后，进入 \texttt{Project2\_personal/4-3} 并运行 \texttt{python main.py}。输入、输出采用当前目录下的相对路径，需保留现有 \texttt{input} 和 \texttt{output} 目录。普通低通保存为 \texttt{output/lowPass.png}，加权结果保存为 \texttt{output/weightLowPass.png}；保存前裁剪到 $[0,255]$ 并转为 8 位整数，转换时截去小数部分。
+
+\newpage
+\section{04-04 原图减低通图}
+将原图减去上一题的低通结果：
+\[
+g_H=f-g_L=\mathcal F^{-1}\{(1-H_L)\mathcal F(f)\}.
+\]
+相减使用浮点结果，差图中的负值在保存时置为 0。三组结果见图~\ref{fig:high}。
+\begin{figure}[H]\centering
+\includegraphics[width=.98\linewidth]{project_04_parameters.png}
+\caption{$D_0=15,30,80$ 时的高通结果，显示范围均为 $[0,255]$。}\label{fig:high}
+\end{figure}
+\begin{center}\small
+\begin{tabular}{@{}lrrr@{}}\toprule
+$D_0$ &15&30&80\\\midrule
+差图标准差（裁剪前） &45.39&36.58&27.03\\
+图片平均灰度（裁剪后） &10.79&7.31&4.06\\\bottomrule
+\end{tabular}
+\end{center}
+(a) 上一题用了 $D_0=15$，因此相减结果对应图 4.26(a) 的参数。图 4.26 各图的 $D_0$ 不同，得到的边缘宽度也不同。同一参数下，原图减低通图与使用 $1-H_L$ 做频域高通一致，计算误差小于 $10^{-10}$。
+
+(b) 将 $D_0$ 改为 80，即方差从 225 改为 6400，可得到图 4.26(c) 对应的效果。此时减掉的低频成分更多，边缘变细，图像也更暗。
+
+另外比较了边界处理。将图像补零到 $1376\times1376$，$D_0$ 同时改为 30，保持与原尺寸 $D_0=15$ 相同的滤波尺度，再截回原图大小。
+\begin{figure}[H]\centering
+\includegraphics[width=.98\linewidth]{boundary_comparison.png}
+\caption{不补零、补零后裁剪以及两者的差值。}\label{fig:boundary}
+\end{figure}
+图~\ref{fig:boundary} 中补零后的图像边缘变暗。外侧 64 像素区域的平均绝对差为 11.42，内部差异小于 $10^{-10}$。这张图的背景较亮，补零在边界引入了黑色区域，影响主要出现在四周。
+
+\newpage
+\section{04-05 频域相关}
+原图为 $256\times256$，模板为 $44\times49$（行$\times$列）。保留模板的黑边，将两图补零到 $299\times304$：
+\[
+P=256+44-1=299,\qquad Q=256+49-1=304.
+\]
+取模板频谱的共轭，与原图频谱相乘，再做逆变换：
+\[
+C=\mathcal F^{-1}\{\mathcal F(f_P)\,\overline{\mathcal F(t_P)}\}.
+\]
+在模板完整落入原图的 $213\times208$ 个位置中取最大值，结果见图~\ref{fig:corr}。所给模板比教材中的模板大，因此补零大小按实际尺寸计算。
+\begin{figure}[H]\centering
+\includegraphics[width=.98\linewidth]{project_05_overview.png}
+\caption{原图、模板、补零模板、相关图和匹配结果。}\label{fig:corr}
+\end{figure}
+\begin{center}
+\begin{tabular}{@{}ll@{}}\toprule
+结果 & 数值\\\midrule
+最大值位置 $(x,y)$，从 0 开始 & $(102,106)$\\
+从 1 开始计数的位置 & $(103,107)$\\
+模板宽、高 & $49,44$\\
+最大相关值 & $21\,352\,516$\\\bottomrule
+\end{tabular}
+\end{center}
+匹配位置是图中的 T。$x$ 为列、$y$ 为行，坐标表示模板左上角。用该位置的图像块与模板直接相乘求和，也得到 $21\,352\,516$。相关图只在显示时缩放灰度，计算使用原始相关值。
+
+安装 NumPy、Pillow 和 Matplotlib 后，运行 \texttt{python project2.py} 即可生成结果图片。FFT 调用 NumPy 的 \texttt{fft2/ifft2}，Pillow 用于读写图片，Matplotlib 用于绘图。
+
+\noindent 参考：课程题目截图；Gonzalez 与 Woods《数字图像处理》相关章节；\href{https://www.imageprocessingplace.com/DIP-2E/dip2e_student_projects.htm}{DIP Laboratory Projects}，04-03 至 04-05。
+\end{document}

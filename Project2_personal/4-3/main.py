@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-from PIL import Image
+from PIL import Image, ImageFilter
 import numpy as np
 
 # PROJECT 04-03
@@ -35,28 +35,21 @@ f0 = np.asarray(img)
 F = np.fft.fft2(f0)
 M, N = F.shape
 
-H_low = gaussian_lowpass_filter(M, N, 10)
-H_high = 1 - gaussian_lowpass_filter(M, N, 200)
-H = H_low + H_high
-g = freq_filter(f0, H)
-Image.fromarray(np.clip(g, 0, 255).astype(np.uint8)).save("output/mixPass.png")
+f = f0.astype(float)
+dy, dx = np.gradient(f)
+magnitude = np.sqrt(dx**2 + dy**2)
+threshold = 10.0
+w = 1 - np.exp(-(magnitude**2) / (2 * threshold**2))
+# 将边缘保护范围向四周扩展约 7 像素
+w_image = Image.fromarray(np.rint(w * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(size=15))
+w = np.asarray(w_image, dtype=float) / 255.0
 
-# 水平方向的频率索引，零频放在中央
-x = np.arange(N) - N // 2
+H1 = gaussian_lowpass_filter(M, N, D0=10)
+H2 = gaussian_lowpass_filter(M, N, D0=40)
 
-# 取穿过零频的中心行
-plt.figure(figsize=(8, 4))
-plt.plot(x, H_low[M // 2, :], label='Lowpass: D0=15')
-plt.plot(x, H_high[M // 2, :], label='Highpass: D0=80')
-plt.plot(x, H[M // 2, :], label='Mixed', linewidth=2)
+g_low = freq_filter(f, H2)
+Image.fromarray(np.clip(g_low, 0, 255).astype(np.uint8)).save("output/lowPass.png")
 
-plt.xlim(-150, 150)
-plt.ylim(-0.05, 1.05)
-plt.xlabel('Horizontal frequency bin')
-plt.ylabel('Weight H')
-plt.title('Filter frequency response: center row')
-plt.grid(alpha=0.3)
-plt.legend()
-plt.tight_layout()
-plt.savefig('output/filter_response.png', dpi=150)
-plt.show()
+g = freq_filter(f, H1)
+g = (1 - w) * g + w * f
+Image.fromarray(np.clip(g, 0, 255).astype(np.uint8)).save("output/weightLowPass.png")
