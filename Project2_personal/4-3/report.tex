@@ -3,7 +3,7 @@
 \usepackage{amsmath,amssymb,graphicx,booktabs,tabularx,float,caption,fancyhdr}
 \usepackage[hidelinks]{hyperref}
 \hypersetup{pdftitle={数字图像处理 第二次project},pdfauthor={韩宇、罗云飞、李响}}
-\graphicspath{{C:/Users/Rodgolin/Documents/Codex/2026-09-22/s/outputs/第二次作业精简版/韩宇24319050_罗云飞24307120_李响24363137_第二次project/results/}}
+\graphicspath{{report_figures/}}
 \linespread{1.12}
 \setlength{\parskip}{3pt}
 \setlength{\intextsep}{7pt}
@@ -28,30 +28,102 @@
 李响 & 24363137 & 频域相关代码、坐标检查及 04-05 报告。\\\bottomrule
 \end{tabularx}
 \end{center}
-三人共同检查结果和整理报告。本次对字符图做高斯低通和高通滤波，再用频域相关定位字母 T。输入采用所给的三张图片，计算时保留浮点数，保存图片时再截取到 $[0,255]$ 并取整。
+三人共同检查结果和整理报告，本次对字符图做高斯低通和高通滤波，再用频域相关定位字母 T。输入采用所给的三张图片，计算时保留浮点数，保存图片时再截取到 $[0,255]$ 并取整。
 
 \section{04-03 高斯低通与边缘加权融合}
-\textbf{基础实现。} 本部分使用个人版本 \texttt{Project2\_personal/4-3/main.py} 和输入图像 \texttt{input/4.11(a).png}。图像大小为 $M\times N=549\times558$（行$\times$列），转为灰度图后以浮点数计算。高斯低通函数支持指定大小、参数 $D_0$ 和中心，默认中心为 $(\lfloor M/2\rfloor,\lfloor N/2\rfloor)=(274,279)$，与中心化后的零频位置对齐：
+\textbf{基础实现}  本部分通过构造二维高斯传递函数完成频域低通。计算过程保留浮点数，以下按实际数据流分析各步代码。
+
+\textbf{（1）读取灰度图并确定尺寸}
+{\small
+\begin{verbatim}
+    img = Image.open("input/4.11(a).png").convert("L")
+    f0 = np.asarray(img)
+    F = np.fft.fft2(f0)
+    M, N = F.shape
+    f = f0.astype(float)
+\end{verbatim}
+}
+\texttt{convert("L")} 将图片转为单通道 8 位灰度图；\texttt{np.asarray} 得到二维数组，每个元素表示对应像素的灰度。代码先做一次 FFT 再取频谱尺寸。该次频谱仅用于取尺寸，实际滤波函数内会重新变换。转成浮点数再计算以避免原图整数类型在梯度、差值或融合中限制数值范围。
+
+\textbf{（2）指定高斯函数的大小、中心并生成坐标}
+{\small
+\begin{verbatim}
+    def gaussian_lowpass_filter(M, N, D0, center=None):
+        if center is None:
+            center = (M//2, N//2)
+        u0, v0 = center
+        u = np.arange(M)[:, None]
+        v = np.arange(N)[None, :]
+\end{verbatim}
+}
+$M,N$ 控制滤波器尺寸，\texttt{center} 指定中心，\texttt{u} 的形状为 $M\times1$，\texttt{v} 为 $1\times N$，分别列出行、列索引。NumPy 广播将二者组合成完整的二维坐标网格，默认中心取 $(u_0,v_0)=(\lfloor M/2\rfloor,\lfloor N/2\rfloor)=(274,279)$，与 \texttt{fftshift} 后的零频索引一致。接口允许改变中心，这个实验的普通低通还是以零频为中心。
+
+\textbf{（3）按到中心的距离计算高斯权重}
+{\small
+\begin{verbatim}
+        D_2 = (u - u0)**2 + (v - v0)**2
+        exponent = -1 * D_2 / (2.0 * D0**2)
+        return np.exp(exponent)
+\end{verbatim}
+}
+\texttt{D\_2} 是各频率位置到中心的距离平方，由广播得到 $M\times N$ 数组；然后直接使用平方距离省略先开方再平方的过程。返回滤波器：
 \[
 H_L(u,v;D_0)=\exp\left[-\frac{(u-u_0)^2+(v-v_0)^2}{2D_0^2}\right].
 \]
-对原图做二维 FFT，用 \texttt{fftshift} 将零频移到中心，与 $H_L$ 逐元素相乘，再撤销中心化并逆变换、取实部，得到低通图 $g_L(D_0)$。本实现不补零，因此采用周期边界假设。$D_0$ 越小，通过的频带越窄，空间平滑越强。
+$D_0$ 控制响应宽度，减小 $D_0$ 会更强地衰减非零频率，使图像更平滑；增大则保留更多细节。
 
-\textbf{改进思路。} 普通高斯低通在抑制细碎纹理时，也会混合黑白边界两侧的灰度，导致轮廓变宽。为保留明显边界，先生成高斯低通图，再根据原图的局部梯度构造空间权重，将低通图与原图融合。梯度大小及初始权重为
+\textbf{（4）计算二维频谱并对齐零频}
+{\small
+\begin{verbatim}
+    def freq_filter(f, H):
+        F = np.fft.fftshift(np.fft.fft2(f))
+\end{verbatim}
+}
+\texttt{fft2} 将图像分解为二维频率成分，得到包含幅度与相位的复数系数。未中心化时，零频位于数组左上角；\texttt{fftshift} 将其移到中心。
+
+\textbf{（5）逐元素衰减频率成分}
+{\small
+\begin{verbatim}
+        G = F * H
+\end{verbatim}
+}
+\texttt{*} 将对应位置相乘。高斯权重为正实数，乘法衰减对应成分的幅度并保持相位。默认零频处权重为 1。
+
+这里发现当低频保留较多，较高频率受到更强抑制，细碎的纹理和锐利过渡随之减弱；但边缘、细线及噪声都可能包含高频，全局高斯权重无法只凭频率区分它们，导致对一些非噪声、对识别图像有利的边缘也被模糊，后面考虑边缘加权处理的创新尝试，
+
+\textbf{（6）逆变换并恢复实值图像}
+{\small
+\begin{verbatim}
+        return np.real(np.fft.ifft2(np.fft.ifftshift(G)))
+\end{verbatim}
+}
+先 \texttt{ifftshift} 撤销中心化，再用 \texttt{ifft2} 重建图像。\texttt{np.real} 去掉浮点运算可能残留的微小虚部。
+
+\textbf{（7）调用实际参数并保存结果}
+{\small
+\begin{verbatim}
+        H2 = gaussian_lowpass_filter(M, N, D0=40)
+        g_low = freq_filter(f, H2)
+        Image.fromarray(np.clip(g_low, 0, 255).astype(np.uint8)).save("output/lowPass.png")
+\end{verbatim}
+}
+以上为当前普通低通的调用。\texttt{np.clip} 将数值限制在 $[0,255]$，\texttt{astype} 转换为 \texttt{np.uint8} 时截去小数，再由 Pillow 将数组转成图片。后面的加权方案另用 $D_0=10$ 生成更强的低通图片。
+
+\textbf{改进思路 } 普通高斯低通在抑制细碎纹理时，也会混合黑白边界两侧的灰度，导致轮廓变宽。所以为了保留明显的边界，先生成高斯低通图，再根据原图的局部梯度构造空间权重，将低通图与原图融合。梯度大小及初始权重为
 \[
 m(x,y)=\sqrt{(\partial_x f)^2+(\partial_y f)^2},\qquad
 w_0(x,y)=1-\exp\left[-\frac{m(x,y)^2}{2T^2}\right],\quad T=10.
 \]
-梯度由 \texttt{np.gradient} 计算。平坦处 $w_0$ 接近 0，主要使用低通结果；明显边缘处 $w_0$ 较大，保留更多原图。仅保护梯度较大的窄边缘时，高斯模糊仍会影响其两侧，因此进一步扩大保护范围。代码先将权重四舍五入为 8 位灰度，再通过 \texttt{MaxFilter(size=15)} 取 $15\times15$ 邻域最大值，最后除以 255，得到 $w\in[0,1]$。这使边缘保护向周围扩展约 7 像素。
+调用 \texttt{np.gradient} 计算梯度，平坦处 $w_0$ 接近 0，主要使用低通结果；明显边缘处 $w_0$ 较大，保留更多原图。但是发现这样仅保护梯度较大的窄边缘时，高斯模糊仍会影响其两侧，所以又进一步扩大保护范围。先将权重四舍五入为 8 位灰度，再通过 \texttt{MaxFilter(size=15)} 取 $15\times15$ 邻域最大值，最后除以 255，得到 $w\in[0,1]$。最后使边缘保护向周围扩展约 7 像素。
 
 最终输出为
 \[
 g_{\mathrm{weighted}}=(1-w)g_L(10)+wf
 =g_L(10)+w\bigl[f-g_L(10)\bigr].
 \]
-这里的 $w$ 按空间位置选择保留程度，不直接加到频域滤波器上。最终结果属于高斯低通后的空间自适应融合，不再是单一的线性高斯低通。
+这里的 $w$ 按空间位置选择保留程度，最终结果变为高斯低通后再在空间的融合
 
-\textbf{参数与对比。} 当前普通低通对照使用 $D_0=40$，加权方案的基础低通使用更强的 $D_0=10$。选择不同参数是因为融合会重新引入部分原图细节：如果两者使用同样的基础平滑强度，加权结果可能显得平滑不足。因此先增强基础平滑，再利用权重保护边界，在区域内部平滑与轮廓保留之间取得视觉折中。当前配置如下：
+\textbf{参数与对比 } 当前普通低通对照使用 $D_0=40$，加权方案的基础低通使用更强的 $D_0=10$。选择不同参数是因为融合会重新引入部分原图细节：如果两者使用同样的基础平滑强度，加权结果可能显得平滑不足。因此先增强基础平滑，再利用权重保护边界，在区域内部平滑与轮廓保留之间取得视觉折中。当前配置如下：
 \begin{center}\small
 \begin{tabular}{@{}lll@{}}\toprule
 方案 & 高斯参数 & 空间权重\\\midrule
@@ -61,25 +133,25 @@ g_{\mathrm{weighted}}=(1-w)g_L(10)+wf
 \end{center}
 \begin{figure}[H]\centering
 \begin{minipage}{.32\linewidth}\centering
-\includegraphics[width=\linewidth]{D:/Project/DIP/Project2_personal/4-3/input/4.11(a).png}\\
+\includegraphics[width=\linewidth]{original.png}\\
 \small 原图
 \end{minipage}\hfill
 \begin{minipage}{.32\linewidth}\centering
-\includegraphics[width=\linewidth]{D:/Project/DIP/Project2_personal/4-3/output/lowPass.png}\\
+\includegraphics[width=\linewidth]{lowPass.png}\\
 \small 普通低通，$D_0=40$
 \end{minipage}\hfill
 \begin{minipage}{.32\linewidth}\centering
-\includegraphics[width=\linewidth]{D:/Project/DIP/Project2_personal/4-3/output/weightLowPass.png}\\
+\includegraphics[width=\linewidth]{weightLowPass.png}\\
 \small 加权融合，基础 $D_0=10$
 \end{minipage}
 \caption{当前输入、普通高斯低通与采用更强基础平滑的边缘加权结果。两种方案使用不同的 $D_0$，用于比较实际参数配置下的视觉效果。}\label{fig:low}
 \end{figure}
 
-\textbf{结果与局限。} 普通低通图中的细线、字母及方块边缘较柔和；加权结果中的竖线、大字母和小字符轮廓更清楚，部分低梯度背景区域也受到更强的平滑。说明更强的基础低通与边缘权重可以组合使用，而不必通过整体增大 $D_0$ 来保留细节。不过，上方部分黑方块周围仍能看到明暗光晕和内部灰度不均，右侧密集斑点也保留较多。其原因是原始梯度不能区分有效边界与细碎纹理，最大值扩展又会使附近区域共同获得较高保护权重；边界附近重新引入的原图与较强低通结果之间仍可能存在不自然过渡。
+\textbf{结果与局限 } 普通低通图中的细线、字母及方块边缘较柔和；加权结果中的竖线、大字母和小字符轮廓更清楚，部分低梯度背景区域也受到更强的平滑。说明更强的基础低通与边缘权重可以组合使用，而不必通过整体增大 $D_0$ 来保留细节。不过，上方部分黑方块周围仍能看到明暗光晕和内部灰度不均，右侧密集斑点也保留较多。其原因是原始梯度不能区分有效边界与细碎纹理，最大值扩展又会使附近区域共同获得较高保护权重；边界附近重新引入的原图与较强低通结果之间仍可能存在不自然过渡。
 
-本次对比展示的是两套参数配置的视觉折中，没有固定 $D_0$ 单独比较权重作用，也未以干净参考图计算去噪指标，因此不能据此断言去噪精度提高，或完全消除了跨边界模糊。基础低通已完成题目所需的滤波函数；本轮实验聚焦 $D_0=40$ 的普通低通与 $D_0=10$ 的加权方案，不将当前结果称为教材图 4.18(c) 的复现。
+本次对比展示的是两套参数配置的视觉折中，没有固定 $D_0$ 单独比较权重作用，也未以干净参考图计算去噪指标，所以也不能算是去噪精度提高，或完全消除了跨边界模糊。基础低通用来完成题目所需的滤波，$D_0=40$ 的普通低通与 $D_0=10$ 的加权方案也只是来尝试一种新的滤波，而且效果并不是很理想，保留边缘而模糊内部比我想的复杂。
 
-\textbf{运行与输出。} 安装 NumPy、Pillow 和 Matplotlib 后，进入 \texttt{Project2\_personal/4-3} 并运行 \texttt{python main.py}。输入、输出采用当前目录下的相对路径，需保留现有 \texttt{input} 和 \texttt{output} 目录。普通低通保存为 \texttt{output/lowPass.png}，加权结果保存为 \texttt{output/weightLowPass.png}；保存前裁剪到 $[0,255]$ 并转为 8 位整数，转换时截去小数部分。
+\textbf{运行输出 } 普通低通保存为 \texttt{output/lowPass.png}，加权结果保存为 \texttt{output/weightLowPass.png}
 
 \newpage
 \section{04-04 原图减低通图}
